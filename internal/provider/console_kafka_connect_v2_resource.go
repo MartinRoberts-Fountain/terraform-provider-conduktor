@@ -95,6 +95,9 @@ func (r *KafkaConnectV2Resource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
+	// Preserve planned security values since API doesn't return sensitive fields
+	plannedSpec := data.Spec
+
 	tflog.Info(ctx, fmt.Sprintf("Creating kafka connect server named %s", data.Name.String()))
 	tflog.Trace(ctx, fmt.Sprintf("Create kafka connect server with desired state : %+v", data))
 
@@ -127,6 +130,9 @@ func (r *KafkaConnectV2Resource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
+	// Restore sensitive security values from plan since API doesn't return them
+	data.Spec = preserveKafkaConnectSensitiveSpec(ctx, plannedSpec, data.Spec)
+
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -140,6 +146,9 @@ func (r *KafkaConnectV2Resource) Read(ctx context.Context, req resource.ReadRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// Preserve existing state security values since API doesn't return sensitive fields
+	existingSpec := data.Spec
 
 	tflog.Info(ctx, fmt.Sprintf("Read kafka connect server named %s", data.Name.String()))
 	get, err := r.apiClient.Describe(ctx, kafkaConnectV2ApiGetPath(data.Cluster.ValueString(), data.Name.ValueString()))
@@ -168,6 +177,9 @@ func (r *KafkaConnectV2Resource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
+	// Restore sensitive security values from existing state since API doesn't return them
+	data.Spec = preserveKafkaConnectSensitiveSpec(ctx, existingSpec, data.Spec)
+
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -181,6 +193,9 @@ func (r *KafkaConnectV2Resource) Update(ctx context.Context, req resource.Update
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// Preserve planned security values since API doesn't return sensitive fields
+	plannedSpec := data.Spec
 
 	tflog.Info(ctx, fmt.Sprintf("Updating kafka connect server named %s", data.Name.String()))
 	tflog.Trace(ctx, fmt.Sprintf("Update kafka connect server with TF data: %+v", data))
@@ -212,6 +227,10 @@ func (r *KafkaConnectV2Resource) Update(ctx context.Context, req resource.Update
 		resp.Diagnostics.AddError("Model Error", fmt.Sprintf("Unable to read kafka connect server, got error: %s", err))
 		return
 	}
+
+	// Restore sensitive security values from plan since API doesn't return them
+	data.Spec = preserveKafkaConnectSensitiveSpec(ctx, plannedSpec, data.Spec)
+
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -251,4 +270,25 @@ func (r *KafkaConnectV2Resource) ImportState(ctx context.Context, req resource.I
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("cluster"), idParts[0])...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), idParts[1])...)
+}
+
+// preserveKafkaConnectSensitiveSpec preserves sensitive security values from the plan
+// since the API doesn't return them in responses.
+func preserveKafkaConnectSensitiveSpec(ctx context.Context, planned schema.SpecValue, fromAPI schema.SpecValue) schema.SpecValue {
+	// If plan has no security config, return API response as-is
+	if planned.Security.IsNull() || planned.Security.IsUnknown() {
+		return fromAPI
+	}
+
+	// Get security attributes from plan
+	plannedSecurityAttrs := planned.Security.Attributes()
+	if plannedSecurityAttrs == nil {
+		return fromAPI
+	}
+
+	// Use the planned security object which contains the sensitive values
+	// The API response won't have these values, so we preserve the plan values
+	fromAPI.Security = planned.Security
+
+	return fromAPI
 }
